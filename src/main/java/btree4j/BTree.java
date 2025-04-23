@@ -222,6 +222,10 @@ public class BTree extends Paged {
         }
     }
 
+    public synchronized int findIndex(@Nonnull Value searchKey) throws BTreeException {
+        return _rootNode.findIndex(searchKey);
+    }
+
     /**
      * removeValue removes a Value from the BTree and returns the associated pointer for it.
      *
@@ -1118,6 +1122,15 @@ public class BTree extends Paged {
             }
             datalen -= (4 + 8);
             this.currentDataLen = datalen;
+        }
+        
+        /** find lest-most value which matches to the key */
+        int findIndex(@Nonnull Value searchKey) throws BTreeException {
+            int idx = searchLeftmostKey(keys, searchKey, keys.length);
+            if (ph.getStatus() == BRANCH) {
+                idx = idx < 0 ? -(idx + 1) : idx + 1;
+            }
+            return idx;
         }
 
         /** find lest-most value which matches to the key */
