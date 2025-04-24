@@ -81,6 +81,10 @@ public class BTree extends Paged {
     protected static final byte LEAF = 1;
     protected static final byte BRANCH = 2;
 
+    public static final int PIM_KEYSPERNODE = 64;
+    public static final int PIM_NODESIZE = PIM_KEYSPERNODE * 2 * 4; // 512B page
+    public static final double PIM_NODEUTIL = 0.7;
+
     /**
      * Cache of the recently used tree nodes.
      *
@@ -102,7 +106,8 @@ public class BTree extends Paged {
     }
 
     public BTree(@Nonnull File file, boolean duplicateAllowed) {
-        this(file, DEFAULT_PAGESIZE, DEFAULT_IN_MEMORY_NODES, duplicateAllowed);
+        //this(file, DEFAULT_PAGESIZE, DEFAULT_IN_MEMORY_NODES, duplicateAllowed);
+        this(file, PIM_NODESIZE, DEFAULT_IN_MEMORY_NODES, duplicateAllowed);
     }
 
     public BTree(@Nonnull File file, @Nonnegative int pageSize, int caches,
@@ -222,10 +227,6 @@ public class BTree extends Paged {
         }
     }
 
-    public synchronized int findIndex(@Nonnull Value searchKey) throws BTreeException {
-        return _rootNode.findIndex(searchKey);
-    }
-
     /**
      * removeValue removes a Value from the BTree and returns the associated pointer for it.
      *
@@ -261,6 +262,10 @@ public class BTree extends Paged {
      */
     public synchronized long findValue(@Nonnull Value key) throws BTreeException {
         return _rootNode.findValue(key);
+    }
+
+    public synchronized long findGlobalIndex(@Nonnull Value searchKey) throws BTreeException {
+        return _rootNode.findGlobalIndex(searchKey);
     }
 
     public enum SearchType {
@@ -743,11 +748,21 @@ public class BTree extends Paged {
                 return true;
             }
             assert (prefix != null);
+            if (afterKeysLength > PIM_KEYSPERNODE * PIM_NODEUTIL) {
+                //System.out.println("split: " + Integer.toString(keys.length));
+                return true;
+            }
+            return false;
+            /*
             // CurrLength + one Long pointer + value length + one int (for value length)
             // actual datalen is smaller than this datalen, because prefix is used.
             int datalen = calculateDataLength();
+            //System.out.println("datalen: " + Integer.toString(datalen));
+            // _pageSize = PIM_NODE_SIZE
+            // _pageHeaderSize = DEFAULT_PAGE_HEADER_SIZE = 127
+            // worksize =  _pageSize - _pageHeaderSize = 128*4 - 127 = 512 - 127 = 385
             int worksize = _fileHeader.getWorkSize();
-            return datalen > worksize;
+            return datalen > worksize;*/
         }
 
         /**
@@ -1123,15 +1138,99 @@ public class BTree extends Paged {
             datalen -= (4 + 8);
             this.currentDataLen = datalen;
         }
-        
-        /** find lest-most value which matches to the key */
-        int findIndex(@Nonnull Value searchKey) throws BTreeException {
+
+        /** find a global index of the matching key */
+        long findGlobalIndex(@Nonnull Value searchKey) throws BTreeException {
+            StringBuilder sb = new StringBuilder();
             int idx = searchLeftmostKey(keys, searchKey, keys.length);
-            if (ph.getStatus() == BRANCH) {
-                idx = idx < 0 ? -(idx + 1) : idx + 1;
+            switch (ph.getStatus()) {
+                case BRANCH:
+                    idx = idx < 0 ? -(idx + 1) : idx + 1;
+                    long childIdx = getChildNode(idx).findGlobalIndex(searchKey);
+                    //System.out.println("branch idx:" + idx);
+                    return PIM_NODESIZE * idx + childIdx;
+                case LEAF:
+                    if (idx < 0) {
+                        return KEY_NOT_FOUND;
+                    } else {
+                        if (idx == 0 && (ph.getLeftLookup() > 0)) {
+                            BTreeNode leftmostNode = this;
+                            while (true) {
+                                leftmostNode = getBTreeNode(root, leftmostNode.prev);
+                                final Value[] lmKeys = leftmostNode.keys;
+                                assert (lmKeys.length > 0);
+                                if (!lmKeys[0].equals(searchKey)) {
+                                    break;
+                                }
+                                final int prevLookup = leftmostNode.ph.getLeftLookup();
+                                if (prevLookup == 0) {
+                                    break;
+                                }
+                            }
+                            final Value[] lmKeys = leftmostNode.keys;
+                            final int lmIdx = leftmostNode.searchLeftmostKey(lmKeys, searchKey,
+                                lmKeys.length);
+                            if (lmIdx < 0) {
+                                throw new BTreeCorruptException(
+                                    "Duplicated key was not found: " + searchKey);
+                            }
+                            //System.out.println("leaf idx:" + lmIdx);
+                            return lmIdx;
+                        } else {
+                            //System.out.println("leaf idx:" + idx);
+                            return idx;
+                        }
+                    }
+                default:
+                    throw new BTreeCorruptException(
+                        "Invalid page type '" + ph.getStatus() + "' in findValue");
             }
-            return idx;
         }
+
+        /*String findGlobalIndex(@Nonnull Value searchKey) throws BTreeException {
+            StringBuilder sb = new StringBuilder();
+            int idx = searchLeftmostKey(keys, searchKey, keys.length);
+            switch (ph.getStatus()) {
+                case BRANCH:
+                    idx = idx < 0 ? -(idx + 1) : idx + 1;
+                    String buf = getChildNode(idx).findGlobalIndex(searchKey);
+                    return sb.append("root:").append(idx).append(", ").append(buf).toString();
+                    //return idx + getChildNode(idx).findGlobalIndex(searchKey);
+                case LEAF:
+                    if (idx < 0) {
+                        return "key not found";
+                    } else {
+                        if (idx == 0 && (ph.getLeftLookup() > 0)) {
+                            BTreeNode leftmostNode = this;
+                            while (true) {
+                                leftmostNode = getBTreeNode(root, leftmostNode.prev);
+                                final Value[] lmKeys = leftmostNode.keys;
+                                assert (lmKeys.length > 0);
+                                if (!lmKeys[0].equals(searchKey)) {
+                                    break;
+                                }
+                                final int prevLookup = leftmostNode.ph.getLeftLookup();
+                                if (prevLookup == 0) {
+                                    break;
+                                }
+                            }
+                            final Value[] lmKeys = leftmostNode.keys;
+                            final int lmIdx = leftmostNode.searchLeftmostKey(lmKeys, searchKey,
+                                lmKeys.length);
+                            if (lmIdx < 0) {
+                                throw new BTreeCorruptException(
+                                    "Duplicated key was not found: " + searchKey);
+                            }
+                            return sb.append("leaf, idx==0:").append(Integer.toString(lmIdx)).toString();
+                        } else {
+                            return sb.append("leaf, idx!=0:").append(Integer.toString(idx)).toString();
+                        }
+                    }
+                default:
+                    throw new BTreeCorruptException(
+                        "Invalid page type '" + ph.getStatus() + "' in findValue");
+            }
+        }*/
 
         /** find lest-most value which matches to the key */
         long findValue(@Nonnull Value searchKey) throws BTreeException {
