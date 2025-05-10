@@ -83,7 +83,7 @@ public class BTree extends Paged {
 
     public static final int PIM_KEYSPERNODE = 64;
     public static final int PIM_NODESIZE = PIM_KEYSPERNODE * 2 * 4; // 512B page
-    public static final double PIM_NODEUTIL = 0.7;
+    public static final double PIM_NODEUTIL = 0.9;
 
     /**
      * Cache of the recently used tree nodes.
